@@ -148,13 +148,17 @@ func TestUpdates(t *testing.T) {
 	CheckUser(t, user2, *users[1])
 
 	// update with struct
+	time.Sleep(1 * time.Second)
 	DB.Table("users").Where("name in ?", []string{users[1].Name}).Updates(User{Name: "updates_02_newname"})
 
 	var user3 User
 	if err := DB.First(&user3, "name = ?", "updates_02_newname").Error; err != nil {
 		t.Errorf("User2's name should be updated")
 	}
-	AssertEqual(t, user2.UpdatedAt, user3.UpdatedAt)
+
+	if user2.UpdatedAt.Format(time.RFC1123Z) == user3.UpdatedAt.Format(time.RFC1123Z) {
+		t.Errorf("User's updated at should be changed, old %v, new %v", user2.UpdatedAt.Format(time.RFC1123Z), user3.UpdatedAt.Format(time.RFC1123Z))
+	}
 
 	// update with gorm exprs
 	if err := DB.Model(&user3).Updates(map[string]interface{}{"age": gorm.Expr("age + ?", 100)}).Error; err != nil {
@@ -466,7 +470,9 @@ func TestSelectWithUpdateColumn(t *testing.T) {
 	var result2 User
 	DB.First(&result2, user.ID)
 
-	AssertEqual(t, lastUpdatedAt, result2.UpdatedAt)
+	if lastUpdatedAt.Format(time.RFC3339Nano) == result2.UpdatedAt.Format(time.RFC3339Nano) {
+		t.Errorf("UpdatedAt should be changed")
+	}
 
 	if result2.Name == user.Name || result2.Age != user.Age {
 		t.Errorf("Should only update users with name column")
@@ -602,6 +608,33 @@ func TestSave(t *testing.T) {
 	var result User
 	if err := DB.First(&result, "name = ?", "save2").Error; err != nil || result.ID != user.ID {
 		t.Fatalf("failed to find updated user")
+	}
+
+	user2 := *GetUser("save2", Config{})
+	DB.Create(&user2)
+
+	time.Sleep(time.Second)
+	user1UpdatedAt := result.UpdatedAt
+	user2UpdatedAt := user2.UpdatedAt
+	var users = []*User{&result, &user2}
+	DB.Save(&users)
+
+	if user1UpdatedAt.Format(time.RFC1123Z) == result.UpdatedAt.Format(time.RFC1123Z) {
+		t.Fatalf("user's updated at should be changed, expects: %+v, got: %+v", user1UpdatedAt, result.UpdatedAt)
+	}
+
+	if user2UpdatedAt.Format(time.RFC1123Z) == user2.UpdatedAt.Format(time.RFC1123Z) {
+		t.Fatalf("user's updated at should be changed, expects: %+v, got: %+v", user2UpdatedAt, user2.UpdatedAt)
+	}
+
+	DB.First(&result)
+	if user1UpdatedAt.Format(time.RFC1123Z) == result.UpdatedAt.Format(time.RFC1123Z) {
+		t.Fatalf("user's updated at should be changed after reload, expects: %+v, got: %+v", user1UpdatedAt, result.UpdatedAt)
+	}
+
+	DB.First(&user2)
+	if user2UpdatedAt.Format(time.RFC1123Z) == user2.UpdatedAt.Format(time.RFC1123Z) {
+		t.Fatalf("user2's updated at should be changed after reload, expects: %+v, got: %+v", user2UpdatedAt, user2.UpdatedAt)
 	}
 
 	dryDB := DB.Session(&gorm.Session{DryRun: true})

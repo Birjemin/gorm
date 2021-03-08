@@ -38,7 +38,6 @@ func TestMigrate(t *testing.T) {
 		{"user_friends", "fk_user_friends_friends"},
 		{"accounts", "fk_users_account"},
 		{"users", "fk_users_team"},
-		{"users", "fk_users_manager"},
 		{"users", "fk_users_company"},
 	} {
 		if !DB.Migrator().HasConstraint(indexes[0], indexes[1]) {
@@ -62,10 +61,11 @@ func TestSmartMigrateColumn(t *testing.T) {
 	DB.AutoMigrate(&UserMigrateColumn{})
 
 	type UserMigrateColumn2 struct {
-		ID       uint
-		Name     string    `gorm:"size:128"`
-		Salary   float64   `gorm:"precision:2"`
-		Birthday time.Time `gorm:"precision:2"`
+		ID                  uint
+		Name                string    `gorm:"size:128"`
+		Salary              float64   `gorm:"precision:2"`
+		Birthday            time.Time `gorm:"precision:2"`
+		NameIgnoreMigration string    `gorm:"size:100"`
 	}
 
 	if err := DB.Table("user_migrate_columns").AutoMigrate(&UserMigrateColumn2{}); err != nil {
@@ -95,10 +95,11 @@ func TestSmartMigrateColumn(t *testing.T) {
 	}
 
 	type UserMigrateColumn3 struct {
-		ID       uint
-		Name     string    `gorm:"size:256"`
-		Salary   float64   `gorm:"precision:3"`
-		Birthday time.Time `gorm:"precision:3"`
+		ID                  uint
+		Name                string    `gorm:"size:256"`
+		Salary              float64   `gorm:"precision:3"`
+		Birthday            time.Time `gorm:"precision:3"`
+		NameIgnoreMigration string    `gorm:"size:128;-:migration"`
 	}
 
 	if err := DB.Table("user_migrate_columns").AutoMigrate(&UserMigrateColumn3{}); err != nil {
@@ -123,6 +124,10 @@ func TestSmartMigrateColumn(t *testing.T) {
 		case "birthday":
 			if precision, _, _ := columnType.DecimalSize(); (fullSupported || precision != 0) && precision != 3 {
 				t.Fatalf("birthday's precision should be 2, but got %v", precision)
+			}
+		case "name_ignore_migration":
+			if length, _ := columnType.Length(); (fullSupported || length != 0) && length != 100 {
+				t.Fatalf("name_ignore_migration's length should still be 100 but got %v", length)
 			}
 		}
 	}
@@ -321,5 +326,35 @@ func TestMigrateColumns(t *testing.T) {
 
 	if DB.Table("column_structs").Migrator().HasColumn(&NewColumnStruct{}, "new_new_name") {
 		t.Fatalf("Found deleted column")
+	}
+}
+
+func TestMigrateConstraint(t *testing.T) {
+	if DB.Dialector.Name() == "sqlite" {
+		t.Skip()
+	}
+
+	names := []string{"Account", "fk_users_account", "Pets", "fk_users_pets", "Company", "fk_users_company", "Team", "fk_users_team", "Languages", "fk_users_languages"}
+
+	for _, name := range names {
+		if !DB.Migrator().HasConstraint(&User{}, name) {
+			DB.Migrator().CreateConstraint(&User{}, name)
+		}
+
+		if err := DB.Migrator().DropConstraint(&User{}, name); err != nil {
+			t.Fatalf("failed to drop constraint %v, got error %v", name, err)
+		}
+
+		if DB.Migrator().HasConstraint(&User{}, name) {
+			t.Fatalf("constraint %v should been deleted", name)
+		}
+
+		if err := DB.Migrator().CreateConstraint(&User{}, name); err != nil {
+			t.Fatalf("failed to create constraint %v, got error %v", name, err)
+		}
+
+		if !DB.Migrator().HasConstraint(&User{}, name) {
+			t.Fatalf("failed to found constraint %v", name)
+		}
 	}
 }

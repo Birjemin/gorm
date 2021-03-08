@@ -78,9 +78,10 @@ type NamedExpr struct {
 // Build build raw expression
 func (expr NamedExpr) Build(builder Builder) {
 	var (
-		idx      int
-		inName   bool
-		namedMap = make(map[string]interface{}, len(expr.Vars))
+		idx              int
+		inName           bool
+		afterParenthesis bool
+		namedMap         = make(map[string]interface{}, len(expr.Vars))
 	)
 
 	for _, v := range expr.Vars {
@@ -131,13 +132,42 @@ func (expr NamedExpr) Build(builder Builder) {
 				inName = false
 			}
 
+			afterParenthesis = false
 			builder.WriteByte(v)
 		} else if v == '?' && len(expr.Vars) > idx {
-			builder.AddVar(builder, expr.Vars[idx])
+			if afterParenthesis {
+				if _, ok := expr.Vars[idx].(driver.Valuer); ok {
+					builder.AddVar(builder, expr.Vars[idx])
+				} else {
+					switch rv := reflect.ValueOf(expr.Vars[idx]); rv.Kind() {
+					case reflect.Slice, reflect.Array:
+						if rv.Len() == 0 {
+							builder.AddVar(builder, nil)
+						} else {
+							for i := 0; i < rv.Len(); i++ {
+								if i > 0 {
+									builder.WriteByte(',')
+								}
+								builder.AddVar(builder, rv.Index(i).Interface())
+							}
+						}
+					default:
+						builder.AddVar(builder, expr.Vars[idx])
+					}
+				}
+			} else {
+				builder.AddVar(builder, expr.Vars[idx])
+			}
+
 			idx++
 		} else if inName {
 			name = append(name, v)
 		} else {
+			if v == '(' {
+				afterParenthesis = true
+			} else {
+				afterParenthesis = false
+			}
 			builder.WriteByte(v)
 		}
 	}
@@ -203,7 +233,7 @@ type Eq struct {
 func (eq Eq) Build(builder Builder) {
 	builder.WriteQuoted(eq.Column)
 
-	if eq.Value == nil {
+	if eqNil(eq.Value) {
 		builder.WriteString(" IS NULL")
 	} else {
 		builder.WriteString(" = ")
@@ -221,7 +251,7 @@ type Neq Eq
 func (neq Neq) Build(builder Builder) {
 	builder.WriteQuoted(neq.Column)
 
-	if neq.Value == nil {
+	if eqNil(neq.Value) {
 		builder.WriteString(" IS NOT NULL")
 	} else {
 		builder.WriteString(" <> ")
@@ -298,4 +328,17 @@ func (like Like) NegationBuild(builder Builder) {
 	builder.WriteQuoted(like.Column)
 	builder.WriteString(" NOT LIKE ")
 	builder.AddVar(builder, like.Value)
+}
+
+func eqNil(value interface{}) bool {
+	if valuer, ok := value.(driver.Valuer); ok {
+		value, _ = valuer.Value()
+	}
+
+	return value == nil || eqNilReflect(value)
+}
+
+func eqNilReflect(value interface{}) bool {
+	reflectValue := reflect.ValueOf(value)
+	return reflectValue.Kind() == reflect.Ptr && reflectValue.IsNil()
 }

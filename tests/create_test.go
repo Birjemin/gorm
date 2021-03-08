@@ -2,6 +2,7 @@ package tests_test
 
 import (
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -50,7 +51,39 @@ func TestCreateInBatches(t *testing.T) {
 		*GetUser("create_in_batches_6", Config{Account: true, Pets: 4, Toys: 3, Company: false, Manager: true, Team: 1, Languages: 3, Friends: 0}),
 	}
 
-	DB.CreateInBatches(&users, 2)
+	result := DB.CreateInBatches(&users, 2)
+	if result.RowsAffected != int64(len(users)) {
+		t.Errorf("affected rows should be %v, but got %v", len(users), result.RowsAffected)
+	}
+
+	for _, user := range users {
+		if user.ID == 0 {
+			t.Fatalf("failed to fill user's ID, got %v", user.ID)
+		} else {
+			var newUser User
+			if err := DB.Where("id = ?", user.ID).Preload(clause.Associations).First(&newUser).Error; err != nil {
+				t.Fatalf("errors happened when query: %v", err)
+			} else {
+				CheckUser(t, newUser, user)
+			}
+		}
+	}
+}
+
+func TestCreateInBatchesWithDefaultSize(t *testing.T) {
+	users := []User{
+		*GetUser("create_with_default_batch_size_1", Config{Account: true, Pets: 2, Toys: 3, Company: true, Manager: true, Team: 0, Languages: 1, Friends: 1}),
+		*GetUser("create_with_default_batch_sizs_2", Config{Account: false, Pets: 2, Toys: 4, Company: false, Manager: false, Team: 1, Languages: 3, Friends: 5}),
+		*GetUser("create_with_default_batch_sizs_3", Config{Account: true, Pets: 0, Toys: 3, Company: true, Manager: false, Team: 4, Languages: 0, Friends: 1}),
+		*GetUser("create_with_default_batch_sizs_4", Config{Account: true, Pets: 3, Toys: 0, Company: false, Manager: true, Team: 0, Languages: 3, Friends: 0}),
+		*GetUser("create_with_default_batch_sizs_5", Config{Account: false, Pets: 0, Toys: 3, Company: true, Manager: false, Team: 1, Languages: 3, Friends: 1}),
+		*GetUser("create_with_default_batch_sizs_6", Config{Account: true, Pets: 4, Toys: 3, Company: false, Manager: true, Team: 1, Languages: 3, Friends: 0}),
+	}
+
+	result := DB.Session(&gorm.Session{CreateBatchSize: 2}).Create(&users)
+	if result.RowsAffected != int64(len(users)) {
+		t.Errorf("affected rows should be %v, but got %v", len(users), result.RowsAffected)
+	}
 
 	for _, user := range users {
 		if user.ID == 0 {
@@ -459,5 +492,28 @@ func TestFirstOrCreateWithPrimaryKey(t *testing.T) {
 
 	if companies[0].ID != 101 || companies[1].ID != 102 {
 		t.Errorf("invalid primary key after creating, got %v, %v", companies[0].ID, companies[1].ID)
+	}
+}
+
+func TestCreateFromSubQuery(t *testing.T) {
+	user := User{Name: "jinzhu"}
+
+	DB.Create(&user)
+
+	subQuery := DB.Table("users").Where("name=?", user.Name).Select("id")
+
+	result := DB.Session(&gorm.Session{DryRun: true}).Model(&Pet{}).Create([]map[string]interface{}{
+		{
+			"name":    "cat",
+			"user_id": gorm.Expr("(?)", DB.Table("(?) as tmp", subQuery).Select("@uid:=id")),
+		},
+		{
+			"name":    "dog",
+			"user_id": gorm.Expr("@uid"),
+		},
+	})
+
+	if !regexp.MustCompile(`INSERT INTO .pets. \(.name.,.user_id.\) .*VALUES \(.+,\(SELECT @uid:=id FROM \(SELECT id FROM .users. WHERE name=.+\) as tmp\)\),\(.+,@uid\)`).MatchString(result.Statement.SQL.String()) {
+		t.Errorf("invalid insert SQL, got %v", result.Statement.SQL.String())
 	}
 }
